@@ -259,10 +259,16 @@ class TestSelector(unittest.TestCase):
     def test_Flat_id_or(self):
         self.do_test_id_selector("Flat", id_selector_type="or")
 
-    # not implemented
+    def test_PQ(self):
+        self.do_test_id_selector("PQ4x4np")
 
-    # def test_PQ(self):
-    #    self.do_test_id_selector("PQ4x4np")
+    def test_PQ_id_range(self):
+        self.do_test_id_selector("PQ4x4np", id_selector_type="range")
+
+    def test_PQ_IP(self):
+        self.do_test_id_selector("PQ4x4np", mt=faiss.METRIC_INNER_PRODUCT)
+
+    # not implemented
 
     # def test_AQ(self):
     #    self.do_test_id_selector("RQ3x4")

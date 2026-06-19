@@ -17,6 +17,7 @@
 
 #include <faiss/impl/DistanceComputer.h>
 #include <faiss/impl/FaissAssert.h>
+#include <faiss/impl/ResultHandler.h>
 #include <faiss/utils/hamming.h>
 
 #include <faiss/impl/pq_code_distance/pq_code_distance-generic.h>
@@ -87,6 +88,38 @@ FlatCodesDistanceComputer* IndexPQ::get_FlatCodesDistanceComputer() const {
     });
 }
 
+namespace {
+
+struct Run_search_pq_with_sel {
+    using T = void;
+
+    template <class BlockResultHandler>
+    void f(BlockResultHandler& res, const IndexPQ* index, const float* xq) {
+        const size_t ntotal = index->ntotal;
+        using SingleResultHandler =
+                typename BlockResultHandler::SingleResultHandler;
+#pragma omp parallel
+        {
+            std::unique_ptr<FlatCodesDistanceComputer> dc(
+                    index->get_FlatCodesDistanceComputer());
+            SingleResultHandler resi(res);
+#pragma omp for
+            for (int64_t q = 0; q < static_cast<int64_t>(res.nq); q++) {
+                resi.begin(q);
+                dc->set_query(xq + index->d * q);
+                for (size_t i = 0; i < ntotal; i++) {
+                    if (res.is_in_selection(i)) {
+                        resi.add_result((*dc)(i), i);
+                    }
+                }
+                resi.end();
+            }
+        }
+    }
+};
+
+} // anonymous namespace
+
 /*****************************************
  * IndexPQ polysemous search routines
  ******************************************/
@@ -103,12 +136,25 @@ void IndexPQ::search(
 
     const SearchParametersPQ* params = nullptr;
     Search_type_t param_search_type = this->search_type;
+    const IDSelector* sel = nullptr;
 
     if (iparams) {
         params = dynamic_cast<const SearchParametersPQ*>(iparams);
         FAISS_THROW_IF_NOT_MSG(params, "invalid search params");
-        FAISS_THROW_IF_NOT_MSG(!params->sel, "selector not supported");
+        sel = params->sel;
         param_search_type = params->search_type;
+    }
+
+    if (sel != nullptr) {
+        FAISS_THROW_IF_NOT_MSG(
+                param_search_type == ST_PQ,
+                "IDSelector is only supported for ST_PQ search type in IndexPQ");
+        Run_search_pq_with_sel r;
+        dispatch_knn_ResultHandler(
+                n, distances, labels, k, metric_type, sel, r, this, x);
+        indexPQ_stats.nq += n;
+        indexPQ_stats.ncode += n * ntotal;
+        return;
     }
 
     if (param_search_type == ST_PQ) { // Simple PQ search
